@@ -31,7 +31,8 @@
 본 서버의 바디는 반드시 **ND-JSON(Newline Delimited JSON)** 형식을 따라야 합니다.
 * **규칙 1:** 각 JSON 객체는 반드시 한 줄(`\n`)로 구분되어야 합니다.
 * **규칙 2:** 바디 내에 여러 개의 JSON 객체를 연속해서 보낼 수 있습니다.
-* **예시:** ```json
+* **예시:** 
+    ```json
     {"type":"chat", "text":"hello"}\n
     {"type":"emoji", "code":"heart"}\n
     ```

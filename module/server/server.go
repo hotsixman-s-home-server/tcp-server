@@ -22,20 +22,6 @@ type ClientCheckData struct {
 	Key  string `json:"key"`
 }
 
-func (this *Server) Listen() {
-	this.Listening = true
-	go func() {
-		for {
-			conn, err := this.Listener.Accept()
-			if err != nil {
-				log.Println("Error accepting:", err)
-				continue
-			}
-			go handleRequest(conn, this)
-		}
-	}()
-}
-
 func CreateServer(port string, keyChecker KeyChecker) (*Server, error) {
 	listener, err := net.Listen("tcp", port)
 	if err != nil {
@@ -54,48 +40,58 @@ func CreateServer(port string, keyChecker KeyChecker) (*Server, error) {
 	return server, nil
 }
 
-func handleRequest(conn net.Conn, server *Server) {
-	name := ""
+func (this *Server) Listen() {
+	this.Listening = true
+	go func() {
+		for {
+			conn, err := this.Listener.Accept()
+			if err != nil {
+				log.Println("Error accepting:", err)
+				continue
+			}
+			go this.handleRequest(conn)
+		}
+	}()
+}
+
+func (this *Server) handleRequest(conn net.Conn) {
+	from := ""
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[CRITICAL] Panic recovered in handleRequest for %s: %v", name, r)
+			log.Printf("[CRITICAL] Panic recovered in handleRequest for %s: %v", from, r)
 		}
 	}()
 	defer func() {
-		server.ClientMapMutex.Lock()
-		delete(server.Client, name)
-		delete(server.ClientWriteMutex, name)
+		this.ClientMapMutex.Lock()
+		delete(this.Client, from)
+		delete(this.ClientWriteMutex, from)
 		conn.Close()
-		server.ClientMapMutex.Unlock()
+		this.ClientMapMutex.Unlock()
 	}()
 	reader := bufio.NewReader(conn)
 
 	// check client
-	name, err := checkClient(reader, server.KeyChecker)
+	from, err := this.checkClient(reader)
 	if err != nil {
 		log.Println("[Error] Error checking client\n", err)
 		return
 	}
-	server.ClientMapMutex.Lock()
-	if _, exists := server.Client[name]; exists {
-		log.Println("[Error]", name, "already exists.")
-		server.ClientMapMutex.Unlock()
+	registerSuccess := this.registerClient(conn, from)
+	if !registerSuccess {
+		log.Println("[Error]", from, "already exists.")
 		return
 	}
-	server.Client[name] = conn
-	server.ClientWriteMutex[name] = &sync.Mutex{}
-	server.ClientMapMutex.Unlock()
 
 	// read
 	for {
-		alive := readMessage(reader, name, server)
+		alive := this.passMessage(reader, from)
 		if !alive {
 			return
 		}
 	}
 }
 
-func checkClient(reader *bufio.Reader, keyChecker KeyChecker) (string, error) {
+func (this *Server) checkClient(reader *bufio.Reader) (string, error) {
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
@@ -107,7 +103,7 @@ func checkClient(reader *bufio.Reader, keyChecker KeyChecker) (string, error) {
 		return "", err
 	}
 
-	check := keyChecker.Check(clientCheckData.Name, clientCheckData.Key)
+	check := this.KeyChecker.Check(clientCheckData.Name, clientCheckData.Key)
 	if !check {
 		return "", &ServerException{code: "INVALID_NAME_OR_KEY"}
 	}
@@ -115,91 +111,69 @@ func checkClient(reader *bufio.Reader, keyChecker KeyChecker) (string, error) {
 	return clientCheckData.Name, nil
 }
 
-func readMessage(reader *bufio.Reader, name string, server *Server) bool {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[CRITICAL] Panic recovered in handleRequest for %s: %v", name, r)
-		}
-	}()
-	header, err := readHeader(reader)
-	validMessage := (err == nil)
-	var writeMutex *sync.Mutex = nil
-	var writer *bufio.Writer = nil
-	if validMessage {
-		server.ClientMapMutex.Lock()
-		destination := server.Client[header["destination"]]
-		writeMutex = server.ClientWriteMutex[header["destination"]]
-		if writeMutex != nil {
-			writeMutex.Lock()
-		}
-		defer func() {
-			if writeMutex != nil {
-				writeMutex.Unlock()
-			}
-		}()
-		if destination != nil {
-			writer = bufio.NewWriter(destination)
-		}
-		server.ClientMapMutex.Unlock()
-	} else {
-		log.Println("[Error] Reading header from", name, ":\n", err)
+func (this *Server) registerClient(conn net.Conn, name string) (success bool) {
+	this.ClientMapMutex.Lock()
+	defer this.ClientMapMutex.Unlock()
+
+	if _, exists := this.Client[name]; exists {
 		return false
 	}
-
-	if writer != nil {
-		header["from"] = name
-		headerJSON, err := json.Marshal(header)
-		if err == nil {
-			_, err = writer.WriteString(string(headerJSON) + "\n")
-			if err == nil {
-				writer.Flush()
-			} else {
-				writer = nil
-			}
-		} else {
-			writer = nil
-		}
-	}
-
-	endFlag := 0
-	for {
-		b, err := reader.ReadByte()
-		if err != nil {
-			log.Println("[Error] Error reading stream", err)
-			return false
-		}
-
-		if b == 'e' {
-			endFlag = 1
-		} else if b == 'n' && endFlag == 1 {
-			endFlag++
-		} else if b == 'd' && endFlag == 2 {
-			endFlag++
-		} else if b == '\n' && endFlag == 3 {
-			endFlag++
-		} else {
-			endFlag = 0
-		}
-
-		if writer != nil {
-			err := writer.WriteByte(b)
-			if err != nil {
-				log.Println("[Error] Error sending message: ", err)
-				writer = nil
-			}
-		}
-
-		if endFlag == 4 {
-			if writer != nil {
-				writer.Flush()
-			}
-			break
-		}
-	}
+	this.Client[name] = conn
+	this.ClientWriteMutex[name] = &sync.Mutex{}
 	return true
 }
 
-func readHeader(reader *bufio.Reader) (map[string]string, error) {
+/*
+이 함수에서, read에 실패했다면 sender와 연결을 종료하기 위해 false를 반환한다.
+write에 실패했다면 추가적인 write만 실행하지 않고 계속한다.
+*/
+func (this *Server) passMessage(reader *bufio.Reader, from string) (alive bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[CRITICAL] Panic recovered in handleRequest for %s: %v", from, r)
+		}
+	}()
+
+	header, err := this.readHeader(reader)
+	if err != nil {
+		log.Println("[Error] Reading header from", from, ":\n", err)
+		return false
+	}
+
+	noDestination := false
+	destination := header["destination"]
+	writeMutex := this.ClientWriteMutex[destination]
+	if writeMutex == nil {
+		noDestination = true
+	} else {
+		writeMutex.Lock()
+		defer writeMutex.Unlock()
+	}
+	writer := this.getDestinationWriter(destination)
+	if writer == nil {
+		noDestination = true
+	}
+	if noDestination {
+		log.Printf("[Error] No destination: from '%s' to '%s'\n", from, destination)
+	}
+
+	success := this.sendHeader(header, from, writer)
+	if !success {
+		writer = nil
+	}
+
+	alive, success = this.passBody(reader, writer)
+	if alive && success {
+		log.Printf("[Success] Message passed from '%s' to '%s'\n", from, destination)
+	} else if !alive {
+		log.Printf("[Error] Error reading stream from '%s'\n", from)
+	} else if !success && !noDestination {
+		log.Printf("[Error] Error sending message from '%s' to '%s'\n", from, destination)
+	}
+	return alive
+}
+
+func (this *Server) readHeader(reader *bufio.Reader) (map[string]string, error) {
 	headerJSON, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, err
@@ -217,4 +191,68 @@ func readHeader(reader *bufio.Reader) (map[string]string, error) {
 	} else {
 		return nil, &ServerException{code: "NO_DESTINATION_OR_ID_IN_HEADER"}
 	}
+}
+
+func (this *Server) getDestinationWriter(destinationName string) *bufio.Writer {
+	this.ClientMapMutex.Lock()
+	defer this.ClientMapMutex.Unlock()
+	destination := this.Client[destinationName]
+	if destination != nil {
+		return bufio.NewWriter(destination)
+	}
+	return nil
+}
+
+func (this *Server) sendHeader(header map[string]string, from string, destinationWriter *bufio.Writer) (success bool) {
+	if destinationWriter == nil {
+		return false
+	}
+
+	header["from"] = from
+	headerJSON, err := json.Marshal(header)
+	if err != nil {
+		return false
+	}
+
+	_, err = destinationWriter.WriteString(string(headerJSON) + "\n")
+	if err != nil {
+		return false
+	}
+
+	destinationWriter.Flush()
+	return true
+}
+
+func (this *Server) passBody(reader *bufio.Reader, writer *bufio.Writer) (alive bool, success bool) {
+	endFlag := 0
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return false, false
+		}
+
+		if b == 0 {
+			endFlag++
+		} else if b == '\n' && endFlag == 1 {
+			endFlag++
+		} else {
+			endFlag = 0
+		}
+
+		if writer != nil {
+			err := writer.WriteByte(b)
+			if err != nil {
+				writer = nil
+			}
+		}
+
+		if endFlag == 2 {
+			if writer != nil {
+				writer.Flush()
+			}
+			break
+		}
+	}
+
+	return true, writer != nil
 }

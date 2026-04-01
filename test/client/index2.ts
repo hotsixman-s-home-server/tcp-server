@@ -21,7 +21,7 @@ setInterval(() => {
     socket.write(JSON.stringify({ destination: 'foo', id: 'asdasd' }) + '\n');
     socket.write(JSON.stringify("fuck you") + '\n');
     socket.write(JSON.stringify(Date.now()) + '\n')
-    socket.write('end\n');
+    socket.write('\0\n');
 }, 1000)
 
 export { }

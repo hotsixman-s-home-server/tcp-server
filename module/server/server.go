@@ -220,7 +220,8 @@ func (this *Server) passBody(from *Client, to *Client) (alive bool, success bool
 		b, err := from.Reader.ReadByte()
 		if err != nil {
 			if writer != nil {
-				writer.WriteString("1\n")
+				writer.WriteString("\n1\n")
+				writer.Flush()
 			}
 			return false, false
 		}

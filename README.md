@@ -24,8 +24,8 @@
 ### ① 헤더 (Header)
 메시지의 목적지와 식별 정보를 담습니다.
 * **규칙:** 반드시 한 줄(`\n`)로 전송
-* **필수 필드:** `destination` (수신자 ID), `id` (메시지 식별자)
-* **예시:** `{"destination": "userB", "id": "msg_101"}\n`
+* **필수 필드:** `to` (수신자 ID), `id` (메시지 식별자)
+* **예시:** `{"to": "userB", "id": "msg_101"}\n`
 
 ### ② 바디 (Body - ND-JSON)
 본 서버의 바디는 반드시 **ND-JSON(Newline Delimited JSON)** 형식을 따라야 합니다.
@@ -41,6 +41,8 @@
 서버가 전체 메시지(헤더+바디)의 수신 완료를 감지하는 기준입니다.
 * **플래그:** `\0\n`
 * **주의:** 바디의 마지막 줄바꿈(`\n`) 직후에 `\0\n`이 붙어야 합니다.
+
+에러가 발생할 경우 '1\n'이 수신됩니다. 따라서 이 경우엔 응답을 보내지 않아도 됩니다.
 
 ---
 
@@ -73,7 +75,7 @@ const socket = await connect({
  */
 function sendNDJsonMessage(targetId, dataObjects) {
   // 1. 헤더 전송
-  const header = { destination: targetId, id: Date.now().toString() };
+  const header = { to: targetId, id: Date.now().toString() };
   socket.write(JSON.stringify(header) + "\n");
 
   // 2. 바디 전송 (각 객체를 JSON화 하고 \n 붙여서 전송)

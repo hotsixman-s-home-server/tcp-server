@@ -40,11 +40,11 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          geep-linux
-          geep-macos-amd64
-          geep-macos-arm64
-          geep-windows-x64.exe
-          geep-windows-x86.exe
+          ndjflow-linux
+          ndjflow-macos-amd64
+          ndjflow-macos-arm64
+          ndjflow-windows-x64.exe
+          ndjflow-windows-x86.exe
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

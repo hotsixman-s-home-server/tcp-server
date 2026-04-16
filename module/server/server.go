@@ -1,23 +1,26 @@
 package server
 
 import (
+	"NDJFlow/module/types"
 	"bufio"
 	"encoding/json"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 )
 
 type Server struct {
-	Listener       net.Listener
+	TCPListener    net.Listener
+	UDSListener    net.Listener
 	Client         map[string]*Client
 	ClientMapMutex *sync.Mutex
 	Listening      bool
 	KeyChecker     KeyChecker
 }
 
-type ClientCheckData struct {
+type RegisterMessage struct {
 	Name string `json:"name"`
 	Key  string `json:"key"`
 }
@@ -30,14 +33,30 @@ type Client struct {
 	Writer *bufio.Writer
 }
 
-func CreateServer(port string, keyChecker KeyChecker) (*Server, error) {
-	listener, err := net.Listen("tcp", port)
-	if err != nil {
-		return nil, err
+func CreateServer(port string, udsPath string, keyChecker KeyChecker) (*Server, error) {
+	var TCPListener net.Listener = nil
+	var UDSListener net.Listener = nil
+	var err error
+
+	if port != "" {
+		TCPListener, err = net.Listen("tcp", port)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if udsPath != "" {
+		if err := os.Remove(udsPath); err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		UDSListener, err = net.Listen("unix", udsPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	server := &Server{
-		Listener:       listener,
+		TCPListener:    TCPListener,
+		UDSListener:    UDSListener,
 		Client:         make(map[string]*Client),
 		ClientMapMutex: &sync.Mutex{},
 		Listening:      false,
@@ -50,13 +69,27 @@ func CreateServer(port string, keyChecker KeyChecker) (*Server, error) {
 func (this *Server) Listen() {
 	this.Listening = true
 	go func() {
-		for {
-			conn, err := this.Listener.Accept()
-			if err != nil {
-				log.Println("Error accepting:", err)
-				continue
+		if this.TCPListener != nil {
+			for {
+				conn, err := this.TCPListener.Accept()
+				if err != nil {
+					//log.Println("Error accepting:", err)
+					continue
+				}
+				go this.handleRequest(conn)
 			}
-			go this.handleRequest(conn)
+		}
+	}()
+	go func() {
+		if this.UDSListener != nil {
+			for {
+				conn, err := this.UDSListener.Accept()
+				if err != nil {
+					//log.Println("Error accepting:", err)
+					continue
+				}
+				go this.handleRequest(conn)
+			}
 		}
 	}()
 }
@@ -103,18 +136,18 @@ func (this *Server) checkClient(reader *bufio.Reader) (string, error) {
 		return "", err
 	}
 
-	clientCheckData := ClientCheckData{}
-	err = json.Unmarshal([]byte(line), &clientCheckData)
+	registerMessage := RegisterMessage{}
+	err = json.Unmarshal([]byte(line), &registerMessage)
 	if err != nil {
 		return "", err
 	}
 
-	check := this.KeyChecker.Check(clientCheckData.Name, clientCheckData.Key)
+	check := this.KeyChecker.Check(registerMessage.Name, registerMessage.Key)
 	if !check {
-		return "", &ServerException{code: "INVALID_NAME_OR_KEY"}
+		return "", &types.InvalidNameOrKeyError{Name: registerMessage.Name}
 	}
 
-	return clientCheckData.Name, nil
+	return registerMessage.Name, nil
 }
 
 func (this *Server) registerClient(conn net.Conn, name string, reader *bufio.Reader) (success bool, client *Client) {
@@ -186,7 +219,7 @@ func (this *Server) readHeader(reader *bufio.Reader) (map[string]string, error) 
 	if header["to"] != "" && header["id"] != "" {
 		return header, nil
 	} else {
-		return nil, &ServerException{code: "NO_TO_OR_ID_IN_HEADER"}
+		return nil, &types.InvalidHeaderError{Header: header}
 	}
 }
 

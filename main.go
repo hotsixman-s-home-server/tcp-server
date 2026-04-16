@@ -1,9 +1,11 @@
 package main
 
 import (
+	"NDJFlow/module/server"
 	"log"
 	"os"
-	"tcp-server/module/server"
+	"os/signal"
+	"syscall"
 
 	"github.com/joho/godotenv"
 )
@@ -22,7 +24,7 @@ func main() {
 		return
 	}
 
-	app, err := server.CreateServer(os.Getenv("PORT"), checker)
+	app, err := server.CreateServer(os.Getenv("PORT"), os.Getenv("UDS_PATH"), checker)
 	if err != nil {
 		log.Fatal("Cannot create server: ", err)
 		return
@@ -30,5 +32,17 @@ func main() {
 
 	app.Listen()
 	log.Println("Listening...")
-	select {}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+
+	if app.TCPListener != nil {
+		app.TCPListener.Close()
+		log.Println("TCP Listener closed.")
+	}
+	if app.UDSListener != nil {
+		app.UDSListener.Close()
+		log.Println("UDS Listener closed (Socket file removed).")
+	}
 }

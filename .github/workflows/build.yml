@@ -1,0 +1,50 @@
+name: Release GEEP
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Build Linux (amd64)
+      run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -v -o ndjflow-linux main.go
+
+    - name: Build MacOS (Intel)
+      run: CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -a -v -o ndjflow-macos-amd64 main.go
+
+    - name: Build MacOS (ARM)
+      run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -a -v -o ndjflow-macos-arm64 main.go
+
+    - name: Build Windows (x64)
+      run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -a -v -o ndjflow-windows-x64.exe main.go
+
+    - name: Build Windows (x86)
+      run: CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -a -v -o ndjflow-windows-x86.exe main.go
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          geep-linux
+          geep-macos-amd64
+          geep-macos-arm64
+          geep-windows-x64.exe
+          geep-windows-x86.exe
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

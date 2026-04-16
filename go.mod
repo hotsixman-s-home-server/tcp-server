@@ -1,4 +1,4 @@
-module tcp-server
+module NDJFlow
 
 go 1.24.3
 
